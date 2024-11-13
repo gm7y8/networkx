@@ -29,11 +29,12 @@ def query_ollama_api(model_name, conversation_history):
 
         # Get the raw response
         raw_response = response.text
-        st.write("Raw Response:", raw_response)  # Display the raw response for debugging
+        #st.write("Raw Response:", raw_response)  # Display the raw response for debugging
 
         # Try parsing the response as JSON
         try:
             data = json.loads(raw_response)
+            # Extract the "response" field directly
             output = data.get("response", "No output received from model.")
         except json.JSONDecodeError:
             st.warning("The response is not in JSON format. Displaying as plain text.")
@@ -118,14 +119,9 @@ if st.button("Submit"):
             response = query_ollama_api("llama3.2:latest", st.session_state.conversation_history)
             st.session_state.conversation_history.append(f"Model: {response}")
 
-            # Display the response data
+            # Display the raw response directly from the "response" field
             st.write("Response Data:")
-            st.text(response)  # Display raw response text
-            try:
-                # Try to parse and display as JSON if possible
-                st.json(json.loads(response))  
-            except json.JSONDecodeError:
-                st.warning("The response could not be parsed as JSON.")
+            st.text(response)  # Display the raw response text (summary)
 
 # Display the conversation history
 st.write("Conversation History:")
