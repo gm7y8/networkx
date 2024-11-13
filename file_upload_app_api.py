@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pyshark
-import plotly.express as px
 import pandas as pd
 import json
 
@@ -17,27 +16,28 @@ def query_ollama_api(model_name, conversation_history):
 
     payload = {
         "model": model_name,
-        "prompt": input_text
+        "prompt": input_text,
+        "stream": False  # Ensuring the response is not streamed
     }
 
     try:
-        st.debug("Sending API request to Ollama server...")
-        st.json(payload)  # Display the request payload for debugging
+        st.write("Sending API request to Ollama server...")
+        st.write("Request Payload:", payload)  # Display the request payload for debugging
 
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         response.raise_for_status()  # Raise an error for HTTP status codes 4xx/5xx
 
-        # Clean the response by stripping extra whitespace
-        raw_response = response.text.strip()
-        st.debug("Raw API Response:", raw_response)
+        # Get the raw response
+        raw_response = response.text
+        st.write("Raw Response:", raw_response)  # Display the raw response for debugging
 
         # Try parsing the response as JSON
         try:
             data = json.loads(raw_response)
-            output = data.get("output", "No output received from model.")
+            output = data.get("response", "No output received from model.")
         except json.JSONDecodeError:
             st.warning("The response is not in JSON format. Displaying as plain text.")
-            output = raw_response
+            output = raw_response  # If not JSON, display raw response
 
         return output
 
@@ -62,6 +62,7 @@ def query_ollama_api(model_name, conversation_history):
         error_message = f"Unexpected error: {e}"
         st.error(error_message)
         return error_message
+
 
 # Function to read and display file content
 def process_file(uploaded_file):
@@ -98,17 +99,8 @@ def process_file(uploaded_file):
         except Exception as e:
             st.error(f"Failed to process file: {e}")
 
-# Function to visualize the response with Plotly
-def visualize_response_with_plotly(response_text):
-    try:
-        words = response_text.split()
-        word_count = pd.DataFrame({'word': words, 'count': range(len(words))})
-        fig = px.bar(word_count, x='word', y='count', title='Word Frequency in Response')
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"Failed to visualize response: {e}")
 
-# Streamlit UI
+# Streamlit UI for displaying results
 st.title("File Upload and Conversational Interaction with Ollama Model")
 
 # File uploader for processing different file types
@@ -120,18 +112,20 @@ st.write("Enter your question or follow-up:")
 user_input = st.text_input("Your input here:")
 
 if st.button("Submit"):
-    if user_input.strip():  # Prevent submission with empty input
+    if user_input:
         with st.spinner('Processing...'):
             st.session_state.conversation_history.append(f"User: {user_input}")
             response = query_ollama_api("llama3.2:latest", st.session_state.conversation_history)
             st.session_state.conversation_history.append(f"Model: {response}")
 
-            # Display the response
-            st.write("Response from Model:")
-            st.text(response)
-
-            # Visualize the model's response using Plotly
-            visualize_response_with_plotly(response)
+            # Display the response data
+            st.write("Response Data:")
+            st.text(response)  # Display raw response text
+            try:
+                # Try to parse and display as JSON if possible
+                st.json(json.loads(response))  
+            except json.JSONDecodeError:
+                st.warning("The response could not be parsed as JSON.")
 
 # Display the conversation history
 st.write("Conversation History:")
