@@ -128,18 +128,18 @@ with chat_container:
 
 # Handle User Input Submission
 if submit_button and user_input:
-    st.session_state.conversation_history.append(f"User: {user_input}")
-
-    # Limit conversation history size
-    st.session_state.conversation_history = st.session_state.conversation_history[-MAX_HISTORY:]
-
-    # Get response from the Ollama API
     with st.spinner('Thinking...'):
+        st.session_state.conversation_history.append(f"User: {user_input}")
+
+        # Limit conversation history size
+        st.session_state.conversation_history = st.session_state.conversation_history[-MAX_HISTORY:]
+
+        # Get response from the Ollama API
         response = asyncio.run(query_ollama_api("llama3.2:latest", st.session_state.conversation_history))
         st.session_state.conversation_history.append(f"Model: {response}")
 
     # Scroll to the bottom of the chat by re-running the script
-    st.experimental_rerun()
+    st.rerun()
 
 # Clear Conversation Button
 clear_button = st.button("Clear Conversation", disabled=st.session_state.processing)
