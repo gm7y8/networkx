@@ -5,6 +5,9 @@ import pyshark
 import pandas as pd
 import asyncio
 
+# Webhook URL where you want to send the data
+WEBHOOK_URL = "https://webhook.site/e81a4e42-1586-4c39-8667-833c7e97c6b8"
+
 # Initialize session state for conversation history and processing state
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
@@ -15,7 +18,17 @@ if "processing" not in st.session_state:
 # Limit the conversation history size
 MAX_HISTORY = 10
 
-# Function to make an HTTP request with fallback to requests
+# Function to send data to a webhook server
+def send_to_webhook(response):
+    try:
+        payload = {"response": response}
+        result = requests.post(WEBHOOK_URL, json=payload)
+        result.raise_for_status()
+        st.success("Response sent to webhook successfully!")
+    except requests.RequestException as e:
+        st.error(f"Failed to send response to webhook: {e}")
+
+# Asynchronous function to interact with the Ollama model via API
 async def query_ollama_api(model_name, conversation_history):
     url = "http://localhost:11434/api/generate"
     headers = {"Content-Type": "application/json"}
@@ -32,7 +45,6 @@ async def query_ollama_api(model_name, conversation_history):
             response.raise_for_status()
             data = response.json()
             return data.get("response", "No output received from model.")
-
     except (httpx.HTTPStatusError, httpx.RequestError, Exception) as httpx_err:
         st.warning(f"HTTPX error occurred: {httpx_err}. Falling back to requests.")
         try:
@@ -139,6 +151,9 @@ if submit_button and user_input:
         # Get response from the Ollama API
         response = asyncio.run(query_ollama_api("llama3.2:latest", st.session_state.conversation_history))
         st.session_state.conversation_history.append(f"Model: {response}")
+
+        # Send the response to the webhook server
+        send_to_webhook(response)
 
     # Scroll to the bottom of the chat by re-running the script
     st.rerun()
