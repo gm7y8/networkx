@@ -1,5 +1,6 @@
 import streamlit as st
 import httpx
+import requests
 import pyshark
 import pandas as pd
 import asyncio
@@ -14,12 +15,11 @@ if "processing" not in st.session_state:
 # Limit the conversation history size
 MAX_HISTORY = 10
 
-# Asynchronous function to interact with the Ollama model via API
+# Function to make an HTTP request with fallback to requests
 async def query_ollama_api(model_name, conversation_history):
     url = "http://localhost:11434/api/generate"
     headers = {"Content-Type": "application/json"}
     input_text = "\n".join(conversation_history)
-
     payload = {
         "model": model_name,
         "prompt": input_text,
@@ -30,17 +30,19 @@ async def query_ollama_api(model_name, conversation_history):
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-
             data = response.json()
-            output = data.get("response", "No output received from model.")
-            return output
+            return data.get("response", "No output received from model.")
 
-    except httpx.HTTPStatusError as http_err:
-        return f"HTTP error: {http_err}"
-    except httpx.RequestError as req_err:
-        return f"Request error: {req_err}"
-    except Exception as e:
-        return f"Unexpected error: {e}"
+    except (httpx.HTTPStatusError, httpx.RequestError, Exception) as httpx_err:
+        st.warning(f"HTTPX error occurred: {httpx_err}. Falling back to requests.")
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("response", "No output received from model.")
+        except requests.RequestException as req_err:
+            st.error(f"Request error: {req_err}")
+            return f"Request error: {req_err}"
 
 # Function to process uploaded files with a progress bar and spinner
 def process_files(uploaded_files):
