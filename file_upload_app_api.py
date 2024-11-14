@@ -1,109 +1,21 @@
 import streamlit as st
-import requests
+import httpx
 import pyshark
 import pandas as pd
-import json
+import asyncio
 
-# CSS styling
-def add_css():
-    st.markdown(
-        """
-        <style>
-        /* General layout with blue background */
-        .main {
-            background-color: #007BFF;
-            font-family: 'Arial', sans-serif;
-            color: white;
-        }
-        /* Header styling */
-        h1 {
-            color: #ffffff;
-            text-align: center;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-        }
-        /* Sidebar styling */
-        .css-1aumxhk {
-            background-color: rgba(255, 255, 255, 0.8);
-            padding: 10px;
-            border-radius: 8px;
-            backdrop-filter: blur(5px);
-        }
-        /* Button styling */
-        .stButton>button {
-            background-color: #4CAF50;
-            color: white;
-            border-radius: 8px;
-            padding: 10px 20px;
-            border: none;
-        }
-        /* Dataframe styling */
-        .css-1d391kg {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-        }
-        /* Text input styling */
-        .stTextInput>div>div>input {
-            background-color: #FFFFFF;
-            color: black;
-            border: none;
-            border-radius: 8px;
-            padding: 10px;
-            width: 100%;
-        }
-        /* Chat interface box styling */
-        .chat-box {
-            background-color: rgba(255, 255, 255, 0.9);
-            color: green;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-# Add custom CSS
-add_css()
-
-# Initialize session state for conversation history
+# Initialize session state for conversation history and processing state
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-# Function to read and display file content
-def process_file(uploaded_file):
-    if uploaded_file is not None:
-        st.session_state.conversation_history = []
-        st.write(f"Uploaded file type: {uploaded_file.type}")
-        try:
-            if uploaded_file.type in ["application/vnd.tcpdump.pcap", "application/octet-stream"]:
-                st.write("Processing PCAP file...")
-                with open("temp.pcap", "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                capture = pyshark.FileCapture("temp.pcap")
-                packets = []
-                for packet in capture:
-                    try:
-                        packets.append({
-                            'No': packet.number,
-                            'Time': packet.sniff_time,
-                            'Source': packet.ip.src,
-                            'Destination': packet.ip.dst,
-                            'Protocol': packet.transport_layer,
-                            'Length': packet.length
-                        })
-                    except AttributeError:
-                        continue
-                capture.close()
-                df = pd.DataFrame(packets)
-                st.dataframe(df)
-                st.session_state.conversation_history.append(f"PCAP Summary: {df.head().to_string()}")
-            else:
-                content = uploaded_file.read().decode('utf-8', errors='ignore')
-                st.write(f"File Content:\n{content[:200]}...")
-                st.session_state.conversation_history.append(f"File Content: {content[:200]}...")
-        except Exception as e:
-            st.error(f"Failed to process file: {e}")
+if "processing" not in st.session_state:
+    st.session_state.processing = False
 
-# Function to interact with the Ollama model via API
-def query_ollama_api(model_name, conversation_history):
+# Limit the conversation history size
+MAX_HISTORY = 10
+
+# Asynchronous function to interact with the Ollama model via API
+async def query_ollama_api(model_name, conversation_history):
     url = "http://localhost:11434/api/generate"
     headers = {"Content-Type": "application/json"}
     input_text = "\n".join(conversation_history)
@@ -115,105 +27,122 @@ def query_ollama_api(model_name, conversation_history):
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
-        response.raise_for_status()
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
 
-        raw_response = response.text
-
-        try:
-            data = json.loads(raw_response)
+            data = response.json()
             output = data.get("response", "No output received from model.")
-        except json.JSONDecodeError:
-            st.warning("The response is not in JSON format. Displaying as plain text.")
-            output = raw_response
+            return output
 
-        return output
-
-    except requests.exceptions.Timeout:
-        st.error("The request to Ollama API timed out. Please try again.")
-        return "API request timed out."
-
-    except requests.exceptions.ConnectionError:
-        st.error("Failed to connect to the Ollama API. Ensure the server is running.")
-        return "Failed to connect to Ollama API."
-
-    except requests.exceptions.HTTPError as http_err:
-        st.error(f"HTTP error occurred: {http_err}")
-        st.write(response.text)
-        return f"HTTP error occurred: {http_err}"
-
-    except requests.exceptions.RequestException as req_err:
-        st.error(f"An error occurred during API request: {req_err}")
-        return f"An error occurred: {req_err}"
-
+    except httpx.HTTPStatusError as http_err:
+        return f"HTTP error: {http_err}"
+    except httpx.RequestError as req_err:
+        return f"Request error: {req_err}"
     except Exception as e:
-        error_message = f"Unexpected error: {e}"
-        st.error(error_message)
-        return error_message
+        return f"Unexpected error: {e}"
 
-# Streamlit UI for displaying results
-st.title("Network Insights")
+# Function to process uploaded files with a progress bar and spinner
+def process_files(uploaded_files):
+    st.session_state.processing = True  # Set processing state
 
-# Sidebar for file format selection
-st.sidebar.header("Upload and Settings")
-st.sidebar.subheader("Select File Formats")
-format_options = {
-    "JSON": "json",
-    "CSV": "csv",
-    "PCAP": "pcap",
-    "SNMP": "snmp",
-    "TDL": "tdl"
-}
-selected_formats = [fmt for fmt, ext in format_options.items() if st.sidebar.checkbox(fmt)]
+    with st.spinner("Processing uploaded files..."):
+        for i, uploaded_file in enumerate(uploaded_files):
+            st.write(f"Processing file {i + 1}/{len(uploaded_files)}: {uploaded_file.name}")
+            progress = st.progress(0)
 
-# File uploader based on selected formats
-if selected_formats:
-    file_types = [format_options[fmt] for fmt in selected_formats]
-    uploaded_file = st.sidebar.file_uploader(
-        "Choose a file",
-        type=file_types,
-        help=f"Selected formats: {', '.join(selected_formats)}."
-    )
-    process_file(uploaded_file)
-else:
-    st.sidebar.warning("Please select at least one file format.")
+            try:
+                if uploaded_file.type in ["application/vnd.tcpdump.pcap", "application/octet-stream", "application/x-pcap"]:
+                    with open("temp.pcap", "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    capture = pyshark.FileCapture("temp.pcap")
+                    packets = []
+                    for idx, packet in enumerate(capture):
+                        try:
+                            packets.append({
+                                'No': packet.number,
+                                'Time': packet.sniff_time,
+                                'Source': packet.ip.src,
+                                'Destination': packet.ip.dst,
+                                'Protocol': packet.transport_layer,
+                                'Length': packet.length
+                            })
+                        except AttributeError:
+                            continue
+                        progress.progress(min((idx + 1) / 100, 1.0))  # Update progress bar
 
-# Layout for user input and conversation history
-col1, col2 = st.columns([3, 1])
+                        if idx >= 99:  # Limit to 100 progress updates
+                            break
+                    capture.close()
+                    df = pd.DataFrame(packets)
+                    st.dataframe(df)
+                    st.session_state.conversation_history.append(f"PCAP Summary: {df.head().to_string()}")
+                else:
+                    content = uploaded_file.read().decode('utf-8', errors='ignore')
+                    st.session_state.conversation_history.append(f"File Content: {content[:200]}...")
 
-with col1:
-    st.subheader("Conversation")
-    
-    # Display each prompt and response in a separate text area, with latest at the bottom
-    for i, message in enumerate(st.session_state.conversation_history):
-        role, text = message.split(': ', 1)
-        height = max(100, len(text) // 2)  # Adjust height based on text length
-        st.text_area(f"{role} Message {i + 1}", value=text, height=height, key=f"{role}_{i}")
+                progress.progress(100)
 
-    # User input section for conversation with the model at the bottom
-    st.write("Enter your question or follow-up:")
-    user_input = st.text_input("Your input here:", placeholder="Type your message here...")
+            except Exception as e:
+                st.error(f"Failed to process file: {e}")
 
-    if st.button("Submit"):
-        if user_input.strip():
-            with st.spinner('Processing...'):
-                st.session_state.conversation_history.append(f"User: {user_input}")
-                response = query_ollama_api("llama3.2:latest", st.session_state.conversation_history)
-                st.session_state.conversation_history.append(f"Model: {response}")
+    st.session_state.processing = False  # Reset processing state
+    st.success("Processing done!")  # Indicate processing completion
 
-with col2:
-    with st.expander("Conversation History", expanded=False):
-        for line in st.session_state.conversation_history:
-            st.write(line)
+# Streamlit UI Layout
+st.title("Enhanced Chat Interface with File Uploads and Ollama API")
 
-        if st.button("Clear Conversation"):
-            st.session_state.conversation_history = []
+# Upload Section with Progress Indicator
+st.subheader("Upload Files")
+uploaded_files = st.file_uploader(
+    "Choose files (PCAP or text)", 
+    type=["json", "psv", "cap", "snmp", "tdl", "pcap"], 
+    accept_multiple_files=True
+)
 
-        if st.button("Download Conversation History"):
-            conversation_text = "\n".join(st.session_state.conversation_history)
-            st.download_button(
-                label="Download as TXT",
-                data=conversation_text,
-                file_name='conversation_history.txt',
-                mime='text/plain'
-            )
+if uploaded_files:
+    process_files(uploaded_files)
+
+# Display Chat History and Input Together
+chat_container = st.container()
+with chat_container:
+    st.subheader("Chat History")
+
+    # Grey out the chat window if processing
+    if st.session_state.processing:
+        st.markdown("<style>div.stContainer { opacity: 0.5; pointer-events: none; }</style>", unsafe_allow_html=True)
+
+    for message in st.session_state.conversation_history:
+        if "User:" in message:
+            st.chat_message("user").markdown(message.replace("User: ", ""))
+        elif "Model:" in message:
+            st.chat_message("assistant").markdown(message.replace("Model: ", ""))
+
+    # Input and Submit Button in a Single Row
+    st.subheader("Your Input")
+    chat_input_col1, chat_input_col2 = st.columns([5, 1], gap="small")
+    with chat_input_col1:
+        user_input = st.text_input("Type your message here:", key="chat_input", label_visibility="collapsed", disabled=st.session_state.processing)
+    with chat_input_col2:
+        submit_button = st.button("Submit", use_container_width=True, key="chat_submit", disabled=st.session_state.processing)
+
+# Handle User Input Submission
+if submit_button and user_input:
+    st.session_state.conversation_history.append(f"User: {user_input}")
+
+    # Limit conversation history size
+    st.session_state.conversation_history = st.session_state.conversation_history[-MAX_HISTORY:]
+
+    # Get response from the Ollama API
+    with st.spinner('Thinking...'):
+        response = asyncio.run(query_ollama_api("llama3.2:latest", st.session_state.conversation_history))
+        st.session_state.conversation_history.append(f"Model: {response}")
+
+    # Scroll to the bottom of the chat by re-running the script
+    st.experimental_rerun()
+
+# Clear Conversation Button
+clear_button = st.button("Clear Conversation", disabled=st.session_state.processing)
+if clear_button:
+    st.session_state.conversation_history = []
+    st.write("Conversation history cleared.")
