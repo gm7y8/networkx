@@ -6,7 +6,7 @@ import pandas as pd
 import asyncio
 
 # Webhook URL where you want to send the data
-WEBHOOK_URL = "https://webhook.site/************************************"
+WEBHOOK_URL = "https://webhook.site/e81a4e42-1586-4c39-8667-833c7e97c6b8"
 
 # CSS styling
 def add_css():
