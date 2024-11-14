@@ -41,52 +41,6 @@ async def query_ollama_api(model_name, conversation_history):
         "stream": False
     }
 
-    cookie_info = """
-The cookies in the payload are mostly valid, but some have potential issues:
-
-Valid Cookies
-- EAMSPFPRD
-- EIDPPFPRD
-- OAMAuthnHintCookie
-- psoft-PORTAL-PSJSESSIONID
-- PS_TOKENEXPIRE
-- PS_TOKEN
-- SignOnDefault
-- PS_LASTSITE
-- ps_theme
-- JSESSIONID
-
-Cookies with Potential Issues
-- PS_DEVICEFEATURES:
-  - Colons (:) may cause parsing issues.
-  - Spaces should be URL-encoded.
-- psback:
-  - Contains URL-encoded characters (%22).
-  - Consider using standard URL encoding.
-
-Non-Standard Cookies
-- X-CSRF-TOKEN
-- X-JWT-ACCESS-TOKEN (JWT token)
-
-Recommendations
-- Replace colons (:) with underscores (_).
-- URL-encode spaces.
-- Ensure consistent cookie formatting.
-
-Compliance
-- RFC 6265 (Cookie Specification)
-- RFC 2965 (HTTP State Management Mechanism)
-
-To maintain cookie integrity:
-- Validate cookie formats.
-- Verify attribute usage.
-- Implement Secure and HttpOnly attributes.
-
-Would you like:
-- Detailed cookie guidance?
-- Cookie security review?
-- Custom cookie development?
-"""
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
