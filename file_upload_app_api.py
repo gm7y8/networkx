@@ -1,12 +1,8 @@
 import streamlit as st
-import httpx
 import requests
 import pyshark
 import pandas as pd
-import asyncio
-
-# Webhook URL where you want to send the data
-WEBHOOK_URL = "https://webhook.site/e81a4e42-1586-4c39-8667-833c7e97c6b8"
+import json
 
 # CSS styling
 def add_css():
@@ -67,31 +63,51 @@ def add_css():
 # Add custom CSS
 add_css()
 
-# Initialize session state for conversation history and processing state
+# Initialize session state for conversation history
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-if "processing" not in st.session_state:
-    st.session_state.processing = False
+# Function to read and display file content
+def process_file(uploaded_file):
+    if uploaded_file is not None:
+        st.session_state.conversation_history = []
+        st.write(f"Uploaded file type: {uploaded_file.type}")
+        try:
+            if uploaded_file.type in ["application/vnd.tcpdump.pcap", "application/octet-stream"]:
+                st.write("Processing PCAP file...")
+                with open("temp.pcap", "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                capture = pyshark.FileCapture("temp.pcap")
+                packets = []
+                for packet in capture:
+                    try:
+                        packets.append({
+                            'No': packet.number,
+                            'Time': packet.sniff_time,
+                            'Source': packet.ip.src,
+                            'Destination': packet.ip.dst,
+                            'Protocol': packet.transport_layer,
+                            'Length': packet.length
+                        })
+                    except AttributeError:
+                        continue
+                capture.close()
+                df = pd.DataFrame(packets)
+                st.dataframe(df)
+                st.session_state.conversation_history.append(f"PCAP Summary: {df.head().to_string()}")
+            else:
+                content = uploaded_file.read().decode('utf-8', errors='ignore')
+                st.write(f"File Content:\n{content[:200]}...")
+                st.session_state.conversation_history.append(f"File Content: {content[:200]}...")
+        except Exception as e:
+            st.error(f"Failed to process file: {e}")
 
-# Limit the conversation history size
-MAX_HISTORY = 10
-
-# Function to send data to a webhook server
-def send_to_webhook(response):
-    try:
-        payload = {"response": response}
-        result = requests.post(WEBHOOK_URL, json=payload)
-        result.raise_for_status()
-        st.success("Response sent to webhook successfully!")
-    except requests.RequestException as e:
-        st.error(f"Failed to send response to webhook: {e}")
-
-# Asynchronous function to interact with the Ollama model via API
-async def query_ollama_api(model_name, conversation_history):
+# Function to interact with the Ollama model via API
+def query_ollama_api(model_name, conversation_history):
     url = "http://localhost:11434/api/generate"
     headers = {"Content-Type": "application/json"}
     input_text = "\n".join(conversation_history)
+
     payload = {
         "model": model_name,
         "prompt": input_text,
@@ -99,62 +115,44 @@ async def query_ollama_api(model_name, conversation_history):
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "No output received from model.")
-    except (httpx.HTTPStatusError, httpx.RequestError, Exception) as httpx_err:
-        st.warning(f"HTTPX error occurred: {httpx_err}. Falling back to requests.")
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+
+        raw_response = response.text
+
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("response", "No output received from model.")
-        except requests.RequestException as req_err:
-            st.error(f"Request error: {req_err}")
-            return f"Request error: {req_err}"
+            data = json.loads(raw_response)
+            output = data.get("response", "No output received from model.")
+        except json.JSONDecodeError:
+            st.warning("The response is not in JSON format. Displaying as plain text.")
+            output = raw_response
 
-# Function to process uploaded files with a progress bar and spinner
-def process_files(uploaded_files):
-    if uploaded_files:
-        st.session_state.processing = True  # Set processing state
-        with st.spinner("Processing uploaded files..."):
-            for uploaded_file in uploaded_files:
-                st.write(f"Processing file: {uploaded_file.name}")
-                try:
-                    if uploaded_file.type in ["application/vnd.tcpdump.pcap", "application/octet-stream", "application/x-pcap"]:
-                        st.write("Processing PCAP file...")
-                        with open("temp.pcap", "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        capture = pyshark.FileCapture("temp.pcap")
-                        packets = []
-                        for packet in capture:
-                            try:
-                                packets.append({
-                                    'No': packet.number,
-                                    'Time': packet.sniff_time,
-                                    'Source': packet.ip.src,
-                                    'Destination': packet.ip.dst,
-                                    'Protocol': packet.transport_layer,
-                                    'Length': packet.length
-                                })
-                            except AttributeError:
-                                continue
-                        capture.close()
-                        df = pd.DataFrame(packets)
-                        st.dataframe(df)
-                        st.session_state.conversation_history.append(f"PCAP Summary: {df.head().to_string()}")
-                    else:
-                        content = uploaded_file.read().decode('utf-8', errors='ignore')
-                        st.session_state.conversation_history.append(f"File Content: {content[:200]}...")
-                except Exception as e:
-                    st.error(f"Failed to process file: {e}")
-        st.session_state.processing = False  # Reset processing state
-        st.success("Processing done!")  # Indicate processing completion
+        return output
 
-# Streamlit UI Layout
-st.title("Enhanced Chat Interface with File Uploads and Ollama API")
+    except requests.exceptions.Timeout:
+        st.error("The request to Ollama API timed out. Please try again.")
+        return "API request timed out."
+
+    except requests.exceptions.ConnectionError:
+        st.error("Failed to connect to the Ollama API. Ensure the server is running.")
+        return "Failed to connect to Ollama API."
+
+    except requests.exceptions.HTTPError as http_err:
+        st.error(f"HTTP error occurred: {http_err}")
+        st.write(response.text)
+        return f"HTTP error occurred: {http_err}"
+
+    except requests.exceptions.RequestException as req_err:
+        st.error(f"An error occurred during API request: {req_err}")
+        return f"An error occurred: {req_err}"
+
+    except Exception as e:
+        error_message = f"Unexpected error: {e}"
+        st.error(error_message)
+        return error_message
+
+# Streamlit UI for displaying results
+st.title("Network Insights")
 
 # Sidebar for file format selection
 st.sidebar.header("Upload and Settings")
@@ -162,22 +160,21 @@ st.sidebar.subheader("Select File Formats")
 format_options = {
     "JSON": "json",
     "CSV": "csv",
-    "PCAP": ["pcap", "cap"],  # Handle both extensions for PCAP files
+    "PCAP": "pcap",
     "SNMP": "snmp",
     "TDL": "tdl"
 }
 selected_formats = [fmt for fmt, ext in format_options.items() if st.sidebar.checkbox(fmt)]
 
-# File uploader based on selected formats with multi-file support
+# File uploader based on selected formats
 if selected_formats:
-    file_types = [ext for fmt in selected_formats for ext in (format_options[fmt] if isinstance(format_options[fmt], list) else [format_options[fmt]])]
-    uploaded_files = st.sidebar.file_uploader(
-        "Choose files",
+    file_types = [format_options[fmt] for fmt in selected_formats]
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose a file",
         type=file_types,
-        accept_multiple_files=True,
         help=f"Selected formats: {', '.join(selected_formats)}."
     )
-    process_files(uploaded_files)
+    process_file(uploaded_file)
 else:
     st.sidebar.warning("Please select at least one file format.")
 
@@ -189,10 +186,7 @@ with col1:
     
     # Display each prompt and response in a separate text area, with latest at the bottom
     for i, message in enumerate(st.session_state.conversation_history):
-        if ": " in message:
-            role, text = message.split(': ', 1)
-        else:
-            role, text = "Info", message
+        role, text = message.split(': ', 1)
         height = max(100, len(text) // 2)  # Adjust height based on text length
         st.text_area(f"{role} Message {i + 1}", value=text, height=height, key=f"{role}_{i}")
 
@@ -204,14 +198,8 @@ with col1:
         if user_input.strip():
             with st.spinner('Processing...'):
                 st.session_state.conversation_history.append(f"User: {user_input}")
-                response = asyncio.run(query_ollama_api("llama3.2:latest", st.session_state.conversation_history))
+                response = query_ollama_api("llama3.2:latest", st.session_state.conversation_history)
                 st.session_state.conversation_history.append(f"Model: {response}")
-
-                # Send the response to the webhook server
-                send_to_webhook(response)
-
-            # Rerun the script to update the UI
-            st.rerun()
 
 with col2:
     with st.expander("Conversation History", expanded=False):
@@ -220,7 +208,6 @@ with col2:
 
         if st.button("Clear Conversation"):
             st.session_state.conversation_history = []
-            st.rerun()  # Rerun to update UI after clearing
 
         if st.button("Download Conversation History"):
             conversation_text = "\n".join(st.session_state.conversation_history)
